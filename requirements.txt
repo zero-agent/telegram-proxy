@@ -1,0 +1,2 @@
+# No external dependencies - uses only Python stdlib
+# This keeps the proxy minimal and secure

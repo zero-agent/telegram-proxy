@@ -1,0 +1,18 @@
+[Unit]
+Description=0agent Telegram Proxy Receiver
+After=network-online.target clawdbot.service
+Wants=clawdbot.service
+
+[Service]
+Type=simple
+User=clawdbot
+WorkingDirectory=/home/clawdbot/clawd
+EnvironmentFile=/home/clawdbot/clawd/telegram-proxy/.env.node
+ExecStart=/usr/bin/python3 /home/clawdbot/clawd/telegram-proxy/node-receiver.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
