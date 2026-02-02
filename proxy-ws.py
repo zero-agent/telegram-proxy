@@ -409,6 +409,10 @@ async def handle_node_message(conn: NodeConnection, msg: Dict):
                         log.info(f"Sending response: {text[:50]}...")
                         result = send_telegram(ADMIN_CHAT_ID, f"{label}\n{text}", parse_mode="")
                         log.info(f"send_telegram result: ok={result.get('ok')}, error={result.get('error', 'none')}")
+                        
+                        # Check for inter-node routing: "to: node-X" prefix
+                        await check_and_forward_to_node(text, conn.name)
+                        
                         conn.last_assistant_text = None
                         conn.expecting_response = False
 
@@ -524,6 +528,60 @@ def parse_routing_prefix(text: str) -> tuple[Optional[str], str]:
         return get_backup_node(), text[2:].strip()
     
     return None, text
+
+
+def parse_inter_node_routing(text: str) -> tuple[Optional[str], str]:
+    """Parse inter-node routing from response text (e.g., 'to: node-2 ...')."""
+    text = text.strip()
+    
+    # Match patterns like "to: node-1", "to: node-2", "to:node-1", etc.
+    import re
+    match = re.match(r'^to:\s*(node-[12])\s+', text, re.IGNORECASE)
+    if match:
+        target_node = match.group(1).lower()
+        message_text = text[match.end():].strip()
+        return target_node, message_text
+    
+    return None, text
+
+
+async def check_and_forward_to_node(text: str, from_node: str):
+    """Check if response has 'to: node-X' prefix and forward to that node."""
+    target_node, message = parse_inter_node_routing(text)
+    
+    if target_node and target_node != from_node:
+        log.info(f"Inter-node routing: {from_node} -> {target_node}")
+        
+        # Get the target node's connection
+        target_conn = node_connections.get(target_node)
+        if not target_conn or not target_conn.connected:
+            log.info(f"Connecting to {target_node} for inter-node message...")
+            if not await connect_to_node(target_node):
+                log.error(f"Failed to connect to {target_node} for inter-node routing")
+                return
+            target_conn = node_connections.get(target_node)
+        
+        # Send to target node with source indication
+        forwarded_message = f"[from {from_node}] {message}"
+        session_key = f"telegram:dm:{ADMIN_CHAT_ID}"
+        idempotency_key = f"internode-{int(time.time() * 1000)}"
+        
+        log.info(f"Forwarding to {target_node}: {forwarded_message[:50]}...")
+        
+        # Mark that we're expecting a response from target node
+        target_conn.expecting_response = True
+        target_conn.expect_time = time.time()
+        
+        result = await send_rpc(target_conn, "chat.send", {
+            "sessionKey": session_key,
+            "message": forwarded_message,
+            "idempotencyKey": idempotency_key,
+        })
+        
+        if result and result.get("ok"):
+            log.info(f"Inter-node forward to {target_node} succeeded")
+        else:
+            log.error(f"Inter-node forward to {target_node} failed: {result}")
 
 
 async def handle_telegram_message(message: Dict):
