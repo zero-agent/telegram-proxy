@@ -90,6 +90,11 @@ def telegram_api(method: str, data: Optional[Dict] = None) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+async def telegram_api_async(method: str, data: Optional[Dict] = None) -> Dict:
+    """Call Telegram Bot API (async - runs in thread pool to not block event loop)."""
+    return await asyncio.to_thread(telegram_api, method, data)
+
+
 def send_telegram(chat_id: str, text: str, parse_mode: str = "Markdown") -> Dict:
     """Send a message via Telegram."""
     return telegram_api("sendMessage", {
@@ -387,6 +392,11 @@ async def handle_node_message(conn: NodeConnection, msg: Dict):
                 expecting = getattr(conn, 'expecting_response', False)
                 expect_time = getattr(conn, 'expect_time', 0)
                 now = time.time()
+                has_text = hasattr(conn, 'last_assistant_text') and conn.last_assistant_text
+                
+                # Debug: log state on lifecycle end
+                if phase == "end":
+                    log.info(f"Lifecycle end check: expecting={expecting}, time_ok={now - expect_time < 60}, has_text={has_text}, conn={conn.name}")
                 
                 # Send if expecting and within window
                 if phase == "end" and expecting and (now - expect_time < 60):
@@ -480,6 +490,7 @@ async def send_message_to_node(node_name: str, text: str, sender: str, retries: 
         # Mark that we're expecting a response
         conn.expecting_response = True
         conn.expect_time = time.time()
+        log.info(f"Set expecting_response=True on conn={conn.name}")
         
         result = await send_rpc(conn, "chat.send", {
             "sessionKey": session_key,
@@ -557,7 +568,7 @@ async def poll_telegram():
     while True:
         try:
             params = {"offset": last_update_id + 1, "timeout": 30}
-            result = telegram_api("getUpdates", params)
+            result = await telegram_api_async("getUpdates", params)
             
             if result.get("ok"):
                 for update in result.get("result", []):
